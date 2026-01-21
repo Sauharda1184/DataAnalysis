@@ -1,0 +1,43 @@
+Option Explicit
+
+Sub ApplyUpdatedFormatToNew_KeepNewOrder()
+
+    Dim wsSrc As Worksheet, wsDst As Worksheet
+    Dim srcBlock As Range, dstRange As Range
+    Dim lastRow As Long, lastCol As Long
+
+    ' Change these sheet names if needed
+    Set wsSrc = ThisWorkbook.Worksheets("Updated")
+    Set wsDst = ThisWorkbook.Worksheets("New")
+
+    ' ---- 1) Pick ONE correctly formatted 4-row block in Updated as the template ----
+    ' Adjust this range to match your block (columns A:J and rows 2:5 are examples)
+    Set srcBlock = wsSrc.Range("A2:J5")
+
+    ' ---- 2) Figure out how far New goes (based on column A) ----
+    lastRow = wsDst.Cells(wsDst.Rows.Count, "A").End(xlUp).Row
+
+    ' Use the template width as the width to format in New
+    lastCol = srcBlock.Columns.Count
+
+    ' Destination range: from row 2 down to lastRow, same number of columns as template
+    Set dstRange = wsDst.Range(wsDst.Cells(2, 1), wsDst.Cells(lastRow, lastCol))
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    ' ---- 3) Apply formats ONLY (does not touch values/order) ----
+    srcBlock.Copy
+    dstRange.PasteSpecial Paste:=xlPasteFormats
+
+    ' Optional: also copy column widths so it looks identical
+    Dim c As Long
+    For c = 1 To lastCol
+        wsDst.Columns(c).ColumnWidth = wsSrc.Columns(c).ColumnWidth
+    Next c
+
+    Application.CutCopyMode = False
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+End Sub
