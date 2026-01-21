@@ -1,0 +1,202 @@
+Option Explicit
+
+Sub FixColumns_AndApplySimpleFormulas()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet   ' <-- Run this while your new tab is active
+
+    Dim desired As Variant
+    desired = Array( _
+        "ID", "Intersection", "Calibration #", "Time of Day", _
+        "Total", "EB Total", "WB Total", "NB Total", "SB Total", _
+        "EBL", "EBT", "EBR", _
+        "WBL", "WBT", "WBR", _
+        "NBL", "NBT", "NBR", _
+        "SBL", "SBT", "SBR" _
+    )
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    ' 1) Rebuild sheet into exact column order (add missing columns)
+    RebuildColumnsExactOrder ws, desired
+
+    ' 2) Apply SIMPLE %Difference and STANDARD GEH formulas across Total..SBR
+    ApplySimplePercentDiffAndGEH ws, desired
+
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    MsgBox "Done: Columns fixed to the exact order and formulas applied (simple %Diff + standard GEH).", vbInformation
+End Sub
+
+
+' =========================
+' Rebuild columns in exact order (copy existing columns; create blanks if missing)
+' =========================
+Private Sub RebuildColumnsExactOrder(ws As Worksheet, desired As Variant)
+    Dim tmp As Worksheet
+    Set tmp = GetOrCreateTempSheet("_tmp_reorder")
+
+    tmp.Cells.Clear
+    tmp.Cells.UnMerge
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then lastRow = ws.UsedRange.Rows.Count
+    If lastRow < 2 Then lastRow = 2
+
+    Dim i As Long, srcCol As Long
+    Dim destCol As Long: destCol = 1
+
+    ' Copy row heights (optional, but helps keep layout consistent)
+    Dim r As Long
+    For r = 1 To lastRow
+        tmp.Rows(r).RowHeight = ws.Rows(r).RowHeight
+    Next r
+
+    ' Build header map from current sheet (row 1)
+    Dim headerMap As Object
+    Set headerMap = CreateObject("Scripting.Dictionary")
+
+    Dim lastCol As Long
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+
+    For i = 1 To lastCol
+        Dim h As String
+        h = Trim$(CStr(ws.Cells(1, i).Value))
+        If Len(h) > 0 Then
+            If Not headerMap.Exists(LCase$(h)) Then headerMap.Add LCase$(h), i
+        End If
+    Next i
+
+    ' For each desired header, copy that full column if exists; otherwise create blank
+    For i = LBound(desired) To UBound(desired)
+        srcCol = 0
+        If headerMap.Exists(LCase$(CStr(desired(i)))) Then
+            srcCol = CLng(headerMap(LCase$(CStr(desired(i)))))
+        End If
+
+        ' Write header
+        tmp.Cells(1, destCol).Value = CStr(desired(i))
+
+        If srcCol > 0 Then
+            ' Copy entire column (values + formats) down to lastRow
+            ws.Range(ws.Cells(1, srcCol), ws.Cells(lastRow, srcCol)).Copy
+            tmp.Cells(1, destCol).PasteSpecial Paste:=xlPasteAll
+            Application.CutCopyMode = False
+
+            ' Keep column width
+            tmp.Columns(destCol).ColumnWidth = ws.Columns(srcCol).ColumnWidth
+        Else
+            ' Missing column: create blank but keep a reasonable width
+            tmp.Columns(destCol).ColumnWidth = 12
+            ' (Optional) copy header style from current A1 if you want consistent header formatting:
+            ws.Cells(1, 1).Copy
+            tmp.Cells(1, destCol).PasteSpecial Paste:=xlPasteFormats
+            Application.CutCopyMode = False
+        End If
+
+        destCol = destCol + 1
+    Next i
+
+    ' Replace original sheet contents with tmp
+    ws.Cells.Clear
+    ws.Cells.UnMerge
+
+    tmp.UsedRange.Copy
+    ws.Range("A1").PasteSpecial Paste:=xlPasteAll
+    Application.CutCopyMode = False
+
+    ' Delete temp sheet
+    Application.DisplayAlerts = False
+    tmp.Delete
+    Application.DisplayAlerts = True
+End Sub
+
+
+' =========================
+' Apply formulas (simple % difference and standard GEH) for Total..SBR
+' Assumes 4-row blocks: Manual / Vision / % Difference / GEH (in column "Calibration #")
+' =========================
+Private Sub ApplySimplePercentDiffAndGEH(ws As Worksheet, desired As Variant)
+    Dim colCalib As Long, colStartNum As Long, colEndNum As Long
+
+    colCalib = FindHeaderCol(ws, "Calibration #")
+    If colCalib = 0 Then
+        MsgBox "Could not find header 'Calibration #'.", vbExclamation
+        Exit Sub
+    End If
+
+    colStartNum = FindHeaderCol(ws, "Total")
+    colEndNum = FindHeaderCol(ws, "SBR")
+
+    If colStartNum = 0 Or colEndNum = 0 Then
+        MsgBox "Could not find numeric range headers 'Total' and/or 'SBR'.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, colCalib).End(xlUp).Row
+
+    Dim r As Long, c As Long
+    Dim rManual As Long, rVision As Long, rPct As Long, rGeh As Long
+    Dim mAddr As String, vAddr As String
+
+    r = 2
+    Do While r <= lastRow - 3
+        If LCase$(Trim$(CStr(ws.Cells(r, colCalib).Value))) = "manual" And _
+           LCase$(Trim$(CStr(ws.Cells(r + 1, colCalib).Value))) = "vision" And _
+           InStr(1, LCase$(CStr(ws.Cells(r + 2, colCalib).Value)), "difference") > 0 And _
+           LCase$(Trim$(CStr(ws.Cells(r + 3, colCalib).Value))) = "geh" Then
+
+            rManual = r
+            rVision = r + 1
+            rPct = r + 2
+            rGeh = r + 3
+
+            For c = colStartNum To colEndNum
+                mAddr = ws.Cells(rManual, c).Address(False, False)
+                vAddr = ws.Cells(rVision, c).Address(False, False)
+
+                ' Simple Percent Difference: (Vision - Manual) / Manual
+                ws.Cells(rPct, c).Formula = "=IFERROR((" & vAddr & "-" & mAddr & ")/" & mAddr & ","""")"
+                ws.Cells(rPct, c).NumberFormat = "0.00%"
+
+                ' Standard GEH: SQRT( 2*(V - M)^2 / (V + M) )
+                ws.Cells(rGeh, c).Formula = "=IFERROR(SQRT(2*(" & vAddr & "-" & mAddr & ")^2/(" & vAddr & "+" & mAddr & ")),"""")"
+                ws.Cells(rGeh, c).NumberFormat = "0.00"
+            Next c
+
+            r = r + 4
+        Else
+            r = r + 1
+        End If
+    Loop
+End Sub
+
+
+' =========================
+' Utilities
+' =========================
+Private Function FindHeaderCol(ws As Worksheet, headerText As String) As Long
+    Dim lastCol As Long, c As Long
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    For c = 1 To lastCol
+        If StrComp(Trim$(CStr(ws.Cells(1, c).Value)), headerText, vbTextCompare) = 0 Then
+            FindHeaderCol = c
+            Exit Function
+        End If
+    Next c
+    FindHeaderCol = 0
+End Function
+
+Private Function GetOrCreateTempSheet(name As String) As Worksheet
+    On Error Resume Next
+    Set GetOrCreateTempSheet = ThisWorkbook.Worksheets(name)
+    On Error GoTo 0
+
+    If GetOrCreateTempSheet Is Nothing Then
+        Set GetOrCreateTempSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        GetOrCreateTempSheet.Name = name
+    End If
+End Function
