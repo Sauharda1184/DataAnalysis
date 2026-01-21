@@ -1,0 +1,148 @@
+Option Explicit
+
+'=========================================================
+' Creates a NEW sheet named "Template" from "NewTemplate"
+' (keeps NewTemplate untouched as backup), then adds:
+'   - % Difference formulas (displayed as Percent)
+'   - GEH formulas (displayed as Decimal)
+'
+' Assumptions in the "Template" layout:
+' - Column C contains the row labels:
+'     Manual, Vision, % Difference, GEH
+' - For each block, the rows are in this order:
+'     Manual (above), Vision, % Difference, GEH
+' - Formulas are applied to columns F:S (Total .. SBR)
+'=========================================================
+
+Sub CreateTemplateFromNewTemplate()
+
+    Dim wsBase As Worksheet, wsT As Worksheet
+
+    ' Base sheet (backup / already formatted)
+    Set wsBase = ThisWorkbook.Worksheets("NewTemplate")
+    If wsBase Is Nothing Then
+        MsgBox "Sheet not found: NewTemplate", vbCritical
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+
+    ' Recreate Template sheet fresh each run (so NewTemplate stays untouched)
+    DeleteSheetIfExists "Template"
+
+    Set wsT = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    wsT.Name = "Template"
+
+    ' Copy everything from NewTemplate into Template (values + formats + merges)
+    wsBase.Cells.Copy Destination:=wsT.Cells
+
+    ' Add formulas + number formats in Template
+    ApplyFormulasToTemplate wsT
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    MsgBox "Done! Created 'Template' from 'NewTemplate' and added % Difference + GEH formulas.", vbInformation
+
+End Sub
+
+'===========================
+' Delete a sheet if it exists
+'===========================
+Private Sub DeleteSheetIfExists(sheetName As String)
+
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+
+    If Not ws Is Nothing Then
+        Application.DisplayAlerts = False
+        ws.Delete
+        Application.DisplayAlerts = True
+    End If
+
+End Sub
+
+'=========================================================
+' Walk down Column C looking for "% Difference" and "GEH"
+' and apply formulas on that row (using the rows above).
+'=========================================================
+Private Sub ApplyFormulasToTemplate(ws As Worksheet)
+
+    Dim lastRow As Long, r As Long
+    Dim cal As String
+
+    lastRow = ws.Cells(ws.Rows.Count, "C").End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    For r = 2 To lastRow
+
+        cal = LCase$(Trim$(CStr(ws.Cells(r, "C").Value)))
+
+        ' % Difference row formulas (uses Vision row above and Manual two above)
+        If cal = "% difference" Or cal = "%difference" Or cal = "percent difference" Then
+            ApplyPercentDiffRowFormulas ws, r
+        End If
+
+        ' GEH row formulas (uses Vision row above and Manual two above)
+        If cal = "geh" Then
+            ApplyGEHRowFormulas ws, r
+        End If
+
+    Next r
+
+End Sub
+
+'=========================================================
+' % Difference formula (DISPLAY AS PERCENT)
+'
+' Correct percent-difference formula:
+'   (Vision - Manual) / ((Vision + Manual) / 2)
+' - Returns blank if Vision+Manual = 0
+' - Written into the sheet as formulas (visible in formula bar)
+' - NumberFormat set to Percent
+'=========================================================
+Private Sub ApplyPercentDiffRowFormulas(ws As Worksheet, pctRow As Long)
+
+    Dim col As Long
+
+    ' Columns F:S = 6..19
+    For col = 6 To 19
+        ws.Cells(pctRow, col).FormulaR1C1 = _
+            "=IF((R[-1]C+R[-2]C)=0,"""",(R[-1]C-R[-2]C)/((R[-1]C+R[-2]C)/2))"
+    Next col
+
+    ' Display as percent
+    ws.Range(ws.Cells(pctRow, 6), ws.Cells(pctRow, 19)).NumberFormat = "0.00%"
+
+End Sub
+
+'=========================================================
+' GEH formula (DISPLAY AS DECIMAL)
+'
+' Standard GEH formula:
+'   SQRT( 2 * (Vision-Manual)^2 / (Vision+Manual) )
+' - Returns blank if Vision+Manual = 0
+' - Written into the sheet as formulas (visible in formula bar)
+' - NumberFormat set to decimal
+'=========================================================
+Private Sub ApplyGEHRowFormulas(ws As Worksheet, gehRow As Long)
+
+    Dim col As Long
+
+    ' Columns F:S = 6..19
+    For col = 6 To 19
+        ws.Cells(gehRow, col).FormulaR1C1 = _
+            "=IF((R[-1]C+R[-2]C)=0,"""",SQRT(2*(R[-1]C-R[-2]C)^2/(R[-1]C+R[-2]C)))"
+    Next col
+
+    ' Display as decimal
+    ws.Range(ws.Cells(gehRow, 6), ws.Cells(gehRow, 19)).NumberFormat = "0.00"
+
+End Sub
