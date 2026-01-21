@@ -1,0 +1,208 @@
+Option Explicit
+
+'=========================================================
+' Creates a NEW sheet named "Updated" from "Base"
+' (keeps Base untouched), then:
+'   1) Ensures Date (D) and Time of Day (E) are merged
+'      across each 4-row block (Manual/Vision/%Diff/GEH)
+'   2) Adds % Difference formulas (as Percent) in F:S
+'   3) Adds GEH formulas (as Decimal) in F:S with correct row refs:
+'        On GEH row: Vision = R[-2]C, Manual = R[-3]C
+'
+' Assumptions:
+' - Column C row labels per signal in this order:
+'     Manual, Vision, % Difference, GEH
+' - Calculations apply to columns F:S (Total .. SBR)
+'=========================================================
+
+Sub CreateUpdatedFromBase()
+
+    Dim wsBase As Worksheet, wsOut As Worksheet
+
+    Set wsBase = ThisWorkbook.Worksheets("Base")
+    If wsBase Is Nothing Then
+        MsgBox "Sheet not found: Base", vbCritical
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+
+    ' Recreate Updated sheet fresh each run
+    DeleteSheetIfExists "Updated"
+
+    Set wsOut = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    wsOut.Name = "Updated"
+
+    ' Copy everything from Base into Updated (values + formatting + merges)
+    wsBase.Cells.Copy Destination:=wsOut.Cells
+
+    ' Ensure Date & Time-of-Day are merged per 4-row block (safe for already-merged ranges)
+    MergeDateTimePerBlock_Safe wsOut
+
+    ' Apply formulas + formats (%Diff and GEH)
+    ApplyFormulasToSheet wsOut
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    MsgBox "Done! Created 'Updated' from 'Base' and applied Date/Time merges + % Difference + GEH formulas.", vbInformation
+
+End Sub
+
+'===========================
+' Delete a sheet if it exists
+'===========================
+Private Sub DeleteSheetIfExists(sheetName As String)
+
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+
+    If Not ws Is Nothing Then
+        Application.DisplayAlerts = False
+        ws.Delete
+        Application.DisplayAlerts = True
+    End If
+
+End Sub
+
+'=========================================================
+' SAFE MERGE: Date (D) and Time of Day (E) across each 4-row block.
+'
+' Why "safe"?
+' If D/E are already merged (copied from Base), clearing contents
+' inside the merged area will throw 1004. So we:
+'   - read top-left value
+'   - unmerge the 4-row range
+'   - clear the 3 cells below
+'   - merge again and restore the value
+'=========================================================
+Private Sub MergeDateTimePerBlock_Safe(ws As Worksheet)
+
+    Dim lastRow As Long, r As Long, topRow As Long
+    Dim cal As String
+    Dim rngD As Range, rngE As Range
+    Dim dtVal As Variant, tmVal As Variant
+
+    lastRow = ws.Cells(ws.Rows.Count, "C").End(xlUp).Row
+    If lastRow < 5 Then Exit Sub
+
+    For r = 2 To lastRow
+
+        cal = LCase$(Trim$(CStr(ws.Cells(r, "C").Value)))
+
+        If cal = "manual" Then
+            topRow = r
+
+            ' ensure block exists
+            If topRow + 3 <= lastRow Then
+
+                Set rngD = ws.Range(ws.Cells(topRow, "D"), ws.Cells(topRow + 3, "D"))
+                Set rngE = ws.Range(ws.Cells(topRow, "E"), ws.Cells(topRow + 3, "E"))
+
+                ' --- DATE (D) ---
+                dtVal = rngD.Cells(1, 1).Value
+
+                If rngD.MergeCells Then rngD.UnMerge   ' must unmerge BEFORE clearing lower cells
+
+                ws.Cells(topRow + 1, "D").ClearContents
+                ws.Cells(topRow + 2, "D").ClearContents
+                ws.Cells(topRow + 3, "D").ClearContents
+
+                rngD.Merge
+                ws.Cells(topRow, "D").Value = dtVal
+                ws.Cells(topRow, "D").VerticalAlignment = xlCenter
+                ws.Cells(topRow, "D").HorizontalAlignment = xlCenter
+
+                ' --- TIME OF DAY (E) ---
+                tmVal = rngE.Cells(1, 1).Value
+
+                If rngE.MergeCells Then rngE.UnMerge
+
+                ws.Cells(topRow + 1, "E").ClearContents
+                ws.Cells(topRow + 2, "E").ClearContents
+                ws.Cells(topRow + 3, "E").ClearContents
+
+                rngE.Merge
+                ws.Cells(topRow, "E").Value = tmVal
+                ws.Cells(topRow, "E").VerticalAlignment = xlCenter
+                ws.Cells(topRow, "E").HorizontalAlignment = xlCenter
+
+            End If
+        End If
+
+    Next r
+
+End Sub
+
+'=========================================================
+' Apply formulas by scanning Column C for "% Difference" and "GEH"
+'=========================================================
+Private Sub ApplyFormulasToSheet(ws As Worksheet)
+
+    Dim lastRow As Long, r As Long
+    Dim cal As String
+
+    lastRow = ws.Cells(ws.Rows.Count, "C").End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    For r = 2 To lastRow
+
+        cal = LCase$(Trim$(CStr(ws.Cells(r, "C").Value)))
+
+        If cal = "% difference" Or cal = "%difference" Or cal = "percent difference" Then
+            ApplyPercentDiffRowFormulas ws, r
+        End If
+
+        If cal = "geh" Then
+            ApplyGEHRowFormulas_Fixed ws, r
+        End If
+
+    Next r
+
+End Sub
+
+'=========================================================
+' % Difference formula (DISPLAY AS PERCENT)
+' On the % Difference row:
+'   Vision = row above (R[-1]C)
+'   Manual = two above (R[-2]C)
+'=========================================================
+Private Sub ApplyPercentDiffRowFormulas(ws As Worksheet, pctRow As Long)
+
+    Dim col As Long
+
+    For col = 6 To 19 ' F..S
+        ws.Cells(pctRow, col).FormulaR1C1 = _
+            "=IF((R[-1]C+R[-2]C)=0,"""",(R[-1]C-R[-2]C)/((R[-1]C+R[-2]C)/2))"
+    Next col
+
+    ws.Range(ws.Cells(pctRow, 6), ws.Cells(pctRow, 19)).NumberFormat = "0.00%"
+
+End Sub
+
+'=========================================================
+' GEH formula (DISPLAY AS DECIMAL) - FIXED
+' Standard GEH:
+'   SQRT( 2 * (Vision-Manual)^2 / (Vision+Manual) )
+' On the GEH row (because % Difference is directly above GEH):
+'   Vision = two above (R[-2]C)
+'   Manual = three above (R[-3]C)
+'=========================================================
+Private Sub ApplyGEHRowFormulas_Fixed(ws As Worksheet, gehRow As Long)
+
+    Dim col As Long
+
+    For col = 6 To 19 ' F..S
+        ws.Cells(gehRow, col).FormulaR1C1 = _
+            "=IF((R[-2]C+R[-3]C)=0,"""",SQRT(2*(R[-2]C-R[-3]C)^2/(R[-2]C+R[-3]C)))"
+    Next col
+
+    ws.Range(ws.Cells(gehRow, 6), ws.Cells(gehRow, 19)).NumberFormat = "0.00"
+
+End Sub
