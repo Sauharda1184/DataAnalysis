@@ -1,0 +1,292 @@
+Option Explicit
+
+' ====== CONFIG ======
+Private Const SHEET_UPDATED As String = "Updated"
+Private Const SHEET_FINAL   As String = "Final"
+Private Const SHEET_OUTPUT  As String = "Updated_Reordered" ' output sheet name
+
+Private Const COL_ID As Long = 1          ' A
+Private Const COL_INTER As Long = 2       ' B
+Private Const COL_CALIB As Long = 3       ' C
+
+' First numeric column to apply formulas to (F = 6 in your screenshot)
+Private Const FIRST_NUM_COL As Long = 6   ' F
+
+' Labels (Column C)
+Private Const LBL_MANUAL As String = "Manual"
+Private Const LBL_VISION As String = "Vision"
+Private Const LBL_PCT As String = "% Difference"
+Private Const LBL_GEH As String = "GEH"
+
+Private Const BLOCK_ROWS As Long = 4
+' =====================
+
+
+Public Sub ReorderUpdatedBlocks_ByFinalOrder()
+    Dim wsU As Worksheet, wsF As Worksheet, wsO As Worksheet
+    Dim lastCol As Long, outRow As Long
+    Dim orderList As Collection
+    Dim blockMap As Object ' Dictionary: key -> startRow
+    Dim i As Long, key As String, srcRow As Long
+
+    Set wsU = ThisWorkbook.Worksheets(SHEET_UPDATED)
+    Set wsF = ThisWorkbook.Worksheets(SHEET_FINAL)
+
+    ' Create/replace output sheet
+    Set wsO = GetOrCreateSheet(SHEET_OUTPUT)
+    wsO.Cells.Clear
+    wsO.Cells.UnMerge
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    lastCol = wsU.Cells(1, wsU.Columns.Count).End(xlToLeft).Column
+
+    ' 1) Read the desired order from Final (A: ID, B: Intersection)
+    Set orderList = ReadFinalOrder(wsF)
+
+    ' 2) Build a map of blocks in Updated: (ID||Intersection) -> start row
+    Set blockMap = BuildUpdatedBlockMap(wsU)
+
+    ' 3) Copy header row from Updated to Output (keep styles)
+    CopyRangeAll wsU, wsO, 1, 1, 1, lastCol, 1, 1
+    CopyColumnWidths wsU, wsO, 1, lastCol
+
+    outRow = 2
+
+    ' 4) Copy blocks from Updated into Output in Final's order
+    For i = 1 To orderList.Count
+        key = orderList(i)
+
+        If blockMap.Exists(key) Then
+            srcRow = CLng(blockMap(key))
+            CopyBlockAll wsU, wsO, srcRow, outRow, BLOCK_ROWS, lastCol
+        Else
+            ' If not found, create a blank block using the first block's style (if available)
+            CreateBlankStyledBlock wsU, wsO, outRow, lastCol, key
+        End If
+
+        ' 5) Force formulas for % Difference and GEH rows for numeric columns (F..lastCol)
+        ApplyPercentAndGEHFormulas wsO, outRow, lastCol
+
+        outRow = outRow + BLOCK_ROWS
+    Next i
+
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    MsgBox "Done! Created '" & SHEET_OUTPUT & "' using Updated format, ordered by Final, with %Diff + GEH formulas.", vbInformation
+End Sub
+
+
+' ---------- Read order from Final ----------
+Private Function ReadFinalOrder(wsF As Worksheet) As Collection
+    Dim c As New Collection
+    Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
+    Dim lastRow As Long, r As Long
+    Dim idVal As String, interVal As String, key As String
+
+    lastRow = wsF.Cells(wsF.Rows.Count, COL_ID).End(xlUp).Row
+
+    For r = 2 To lastRow
+        idVal = Trim$(CStr(wsF.Cells(r, COL_ID).Value))
+        interVal = Trim$(CStr(wsF.Cells(r, COL_INTER).Value))
+        If Len(idVal) > 0 Or Len(interVal) > 0 Then
+            key = MakeKey(idVal, interVal)
+            If Not seen.Exists(key) Then
+                seen.Add key, True
+                c.Add key
+            End If
+        End If
+    Next r
+
+    Set ReadFinalOrder = c
+End Function
+
+
+' ---------- Build map from Updated ----------
+Private Function BuildUpdatedBlockMap(wsU As Worksheet) As Object
+    Dim dict As Object: Set dict = CreateObject("Scripting.Dictionary")
+    Dim lastRow As Long, r As Long
+    Dim idVal As String, interVal As String, key As String
+
+    lastRow = wsU.Cells(wsU.Rows.Count, COL_CALIB).End(xlUp).Row
+    r = 2
+
+    Do While r <= lastRow - 3
+        If IsBlockStart(wsU, r) Then
+            idVal = Trim$(CStr(wsU.Cells(r, COL_ID).Value))
+            interVal = Trim$(CStr(wsU.Cells(r, COL_INTER).Value))
+            key = MakeKey(idVal, interVal)
+
+            ' For merged A/B cells, ID/Intersection is usually on the top row of the block (r)
+            If Len(idVal) > 0 Or Len(interVal) > 0 Then
+                If Not dict.Exists(key) Then dict.Add key, r
+            End If
+
+            r = r + 4
+        Else
+            r = r + 1
+        End If
+    Loop
+
+    Set BuildUpdatedBlockMap = dict
+End Function
+
+Private Function IsBlockStart(ws As Worksheet, r As Long) As Boolean
+    Dim c0 As String, c1 As String, c2 As String, c3 As String
+    c0 = Trim$(CStr(ws.Cells(r, COL_CALIB).Value))
+    c1 = Trim$(CStr(ws.Cells(r + 1, COL_CALIB).Value))
+    c2 = Trim$(CStr(ws.Cells(r + 2, COL_CALIB).Value))
+    c3 = Trim$(CStr(ws.Cells(r + 3, COL_CALIB).Value))
+
+    IsBlockStart = (StrComp(c0, LBL_MANUAL, vbTextCompare) = 0 And _
+                    StrComp(c1, LBL_VISION, vbTextCompare) = 0 And _
+                    StrComp(c2, LBL_PCT, vbTextCompare) = 0 And _
+                    StrComp(c3, LBL_GEH, vbTextCompare) = 0)
+End Function
+
+
+' ---------- Copy helpers ----------
+Private Sub CopyBlockAll(wsSrc As Worksheet, wsDst As Worksheet, srcRow As Long, dstRow As Long, numRows As Long, lastCol As Long)
+    ' copy values + formats
+    CopyRangeAll wsSrc, wsDst, srcRow, srcRow + numRows - 1, 1, lastCol, dstRow, 1
+
+    ' copy row heights
+    Dim i As Long
+    For i = 0 To numRows - 1
+        wsDst.Rows(dstRow + i).RowHeight = wsSrc.Rows(srcRow + i).RowHeight
+    Next i
+
+    ' copy merges within the block
+    CopyMergesInBlock wsSrc, wsDst, srcRow, srcRow + numRows - 1, dstRow
+End Sub
+
+Private Sub CopyRangeAll(wsSrc As Worksheet, wsDst As Worksheet, r1 As Long, r2 As Long, c1 As Long, c2 As Long, dstTopRow As Long, dstLeftCol As Long)
+    wsSrc.Range(wsSrc.Cells(r1, c1), wsSrc.Cells(r2, c2)).Copy
+    wsDst.Cells(dstTopRow, dstLeftCol).PasteSpecial Paste:=xlPasteAll
+    Application.CutCopyMode = False
+End Sub
+
+Private Sub CopyColumnWidths(wsSrc As Worksheet, wsDst As Worksheet, c1 As Long, c2 As Long)
+    Dim c As Long
+    For c = c1 To c2
+        wsDst.Columns(c).ColumnWidth = wsSrc.Columns(c).ColumnWidth
+    Next c
+End Sub
+
+Private Sub CopyMergesInBlock(wsSrc As Worksheet, wsDst As Worksheet, srcTop As Long, srcBottom As Long, dstTop As Long)
+    Dim cell As Range, seen As Object, addr As String
+    Dim rowShift As Long: rowShift = dstTop - srcTop
+    Set seen = CreateObject("Scripting.Dictionary")
+
+    ' Unmerge target area first to avoid conflicts
+    wsDst.Range(wsDst.Cells(dstTop, 1), wsDst.Cells(dstTop + (srcBottom - srcTop), wsDst.UsedRange.Columns.Count)).UnMerge
+
+    For Each cell In wsSrc.Range(wsSrc.Cells(srcTop, 1), wsSrc.Cells(srcBottom, wsSrc.UsedRange.Columns.Count))
+        If cell.MergeCells Then
+            addr = cell.MergeArea.Address(False, False)
+            If Not seen.Exists(addr) Then
+                seen.Add addr, True
+                If cell.MergeArea.Row >= srcTop And (cell.MergeArea.Row + cell.MergeArea.Rows.Count - 1) <= srcBottom Then
+                    wsDst.Range( _
+                        wsDst.Cells(cell.MergeArea.Row + rowShift, cell.MergeArea.Column), _
+                        wsDst.Cells(cell.MergeArea.Row + rowShift + cell.MergeArea.Rows.Count - 1, cell.MergeArea.Column + cell.MergeArea.Columns.Count - 1) _
+                    ).Merge
+                End If
+            End If
+        End If
+    Next cell
+End Sub
+
+
+' ---------- Create blank block if missing ----------
+Private Sub CreateBlankStyledBlock(wsU As Worksheet, wsO As Worksheet, dstRow As Long, lastCol As Long, key As String)
+    Dim templateRow As Long
+    templateRow = FindFirstBlockStart(wsU)
+
+    If templateRow > 0 Then
+        CopyBlockAll wsU, wsO, templateRow, dstRow, BLOCK_ROWS, lastCol
+    Else
+        ' fallback: just create 4 blank rows
+        wsO.Rows(dstRow & ":" & dstRow + 3).Insert Shift:=xlDown
+    End If
+
+    ' Put ID/Intersection values from key into the top row
+    Dim idVal As String, interVal As String
+    ParseKey key, idVal, interVal
+    wsO.Cells(dstRow, COL_ID).Value = idVal
+    wsO.Cells(dstRow, COL_INTER).Value = interVal
+
+    ' Ensure calibration labels
+    wsO.Cells(dstRow, COL_CALIB).Value = LBL_MANUAL
+    wsO.Cells(dstRow + 1, COL_CALIB).Value = LBL_VISION
+    wsO.Cells(dstRow + 2, COL_CALIB).Value = LBL_PCT
+    wsO.Cells(dstRow + 3, COL_CALIB).Value = LBL_GEH
+End Sub
+
+Private Function FindFirstBlockStart(wsU As Worksheet) As Long
+    Dim lastRow As Long, r As Long
+    lastRow = wsU.Cells(wsU.Rows.Count, COL_CALIB).End(xlUp).Row
+    For r = 2 To lastRow - 3
+        If IsBlockStart(wsU, r) Then
+            FindFirstBlockStart = r
+            Exit Function
+        End If
+    Next r
+    FindFirstBlockStart = 0
+End Function
+
+
+' ---------- Apply formulas ----------
+Private Sub ApplyPercentAndGEHFormulas(ws As Worksheet, blockTopRow As Long, lastCol As Long)
+    Dim rManual As Long, rVision As Long, rPct As Long, rGeh As Long
+    Dim c As Long
+    Dim mAddr As String, vAddr As String
+
+    rManual = blockTopRow
+    rVision = blockTopRow + 1
+    rPct = blockTopRow + 2
+    rGeh = blockTopRow + 3
+
+    For c = FIRST_NUM_COL To lastCol
+        mAddr = ws.Cells(rManual, c).Address(False, False)
+        vAddr = ws.Cells(rVision, c).Address(False, False)
+
+        ' % Difference (symmetric): (V - M) / ((V + M) / 2)
+        ws.Cells(rPct, c).Formula = "=IFERROR((" & vAddr & "-" & mAddr & ")/((" & vAddr & "+" & mAddr & ")/2),"""")"
+        ws.Cells(rPct, c).NumberFormat = "0.00%"
+
+        ' GEH:
+        ' IF(Manual<30, ABS(Vision-Manual), SQRT(2*(Vision-Manual)^2/(Vision+Manual)))
+        ws.Cells(rGeh, c).Formula = "=IFERROR(IF(" & mAddr & "<30,ABS(" & vAddr & "-" & mAddr & ")," & _
+                                    "SQRT(2*(" & vAddr & "-" & mAddr & ")^2/(" & vAddr & "+" & mAddr & "))),"""")"
+        ws.Cells(rGeh, c).NumberFormat = "0.00"
+    Next c
+End Sub
+
+
+' ---------- Sheet helpers ----------
+Private Function GetOrCreateSheet(sheetName As String) As Worksheet
+    On Error Resume Next
+    Set GetOrCreateSheet = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+
+    If GetOrCreateSheet Is Nothing Then
+        Set GetOrCreateSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        GetOrCreateSheet.Name = sheetName
+    End If
+End Function
+
+
+' ---------- Key helpers ----------
+Private Function MakeKey(idVal As String, interVal As String) As String
+    MakeKey = Trim$(idVal) & "||" & Trim$(interVal)
+End Function
+
+Private Sub ParseKey(ByVal key As String, ByRef idVal As String, ByRef interVal As String)
+    Dim parts() As String
+    parts = Split(key, "||")
+    idVal = parts(0)
+    If UBound(parts) >= 1 Then interVal = parts(1) Else interVal = ""
+End Sub
