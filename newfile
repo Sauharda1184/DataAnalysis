@@ -1,0 +1,99 @@
+Option Explicit
+
+Sub BuildSignalTemplate()
+
+    Dim wsW As Worksheet, wsR As Worksheet
+    Dim lastRow As Long, r As Long, outRow As Long
+    Dim dict As Object, sig As Variant, inter As String
+
+    Set wsW = ThisWorkbook.Worksheets("WorkingData")
+    Set wsR = ThisWorkbook.Worksheets("ReportTemplate")
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    wsR.Cells.Clear
+
+    ' Headers A:S
+    wsR.Range("A1:S1").Value = Array( _
+        "ID", "Intersection", "Calibration #", "Date", "Time of Day", _
+        "Total", "EB Total", "WB Total", "NB Total", "SB Total", _
+        "EBL", "EBT", "EBR", _
+        "NBL", "NBT", "NBR", _
+        "SBL", "SBT", "SBR")
+
+    ' Collect unique Signal IDs (preserve appearance order)
+    lastRow = wsW.Cells(wsW.Rows.Count, "A").End(xlUp).Row
+    For r = 2 To lastRow
+        If Len(wsW.Cells(r, "A").Value) > 0 Then
+            If Not dict.Exists(CStr(wsW.Cells(r, "A").Value)) Then
+                dict.Add CStr(wsW.Cells(r, "A").Value), r
+            End If
+        End If
+    Next r
+
+    outRow = 2
+
+    For Each sig In dict.Keys
+
+        inter = wsW.Cells(dict(sig), "B").Value
+
+        wsR.Rows(outRow & ":" & outRow + 3).Insert Shift:=xlDown
+
+        ' Merge A & B only
+        wsR.Range(wsR.Cells(outRow, "A"), wsR.Cells(outRow + 3, "A")).Merge
+        wsR.Range(wsR.Cells(outRow, "B"), wsR.Cells(outRow + 3, "B")).Merge
+
+        wsR.Cells(outRow, "A").Value = sig
+        wsR.Cells(outRow, "B").Value = inter
+
+        ' Fixed row labels in Column C
+        wsR.Cells(outRow, "C").Resize(4).Value = _
+            Application.Transpose(Array("Manual", "Vision", "% Difference", "GEH"))
+
+        ' Format A:B block
+        With wsR.Range(wsR.Cells(outRow, "A"), wsR.Cells(outRow + 3, "B"))
+            .Interior.Color = vbBlack
+            .Font.Color = vbWhite
+            .Font.Bold = True
+            .VerticalAlignment = xlCenter
+        End With
+
+        ' Fill data from WorkingData
+        FillSignalData wsW, wsR, sig, outRow, lastRow
+
+        outRow = outRow + 4
+    Next sig
+
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+End Sub
+
+
+Sub FillSignalData(wsW As Worksheet, wsR As Worksheet, sig As Variant, outRow As Long, lastRow As Long)
+
+    Dim r As Long, cal As String, tr As Long
+
+    For r = 2 To lastRow
+        If CStr(wsW.Cells(r, "A").Value) = CStr(sig) Then
+
+            cal = LCase(Trim$(CStr(wsW.Cells(r, "C").Value)))
+
+            Select Case cal
+                Case "manual": tr = outRow
+                Case "vision": tr = outRow + 1
+                Case "% difference", "%difference", "percent difference": tr = outRow + 2
+                Case "geh": tr = outRow + 3
+                Case Else: tr = 0
+            End Select
+
+            If tr > 0 Then
+                ' Copy D:S (Date..SBR) = 16 columns
+                wsR.Cells(tr, "D").Resize(1, 16).Value = wsW.Cells(r, "D").Resize(1, 16).Value
+            End If
+        End If
+    Next r
+
+End Sub
