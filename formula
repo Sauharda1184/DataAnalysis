@@ -1,0 +1,69 @@
+Option Explicit
+
+Sub Apply_Standard_PercentDiff_and_GEH()
+
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("formula")
+
+    Const COL_CALIB As Long = 3        ' Column C
+    Const FIRST_NUM_COL As Long = 6    ' Column F (Total)
+    
+    Dim lastCol As Long
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_CALIB).End(xlUp).Row
+
+    Dim r As Long, c As Long
+    Dim rManual As Long, rVision As Long, rPct As Long, rGeh As Long
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    r = 2
+    Do While r <= lastRow - 3
+
+        If LCase(Trim(ws.Cells(r, COL_CALIB).Value)) = "manual" _
+           And LCase(Trim(ws.Cells(r + 1, COL_CALIB).Value)) = "vision" _
+           And InStr(1, LCase(ws.Cells(r + 2, COL_CALIB).Value), "difference") > 0 _
+           And LCase(Trim(ws.Cells(r + 3, COL_CALIB).Value)) = "geh" Then
+
+            rManual = r
+            rVision = r + 1
+            rPct = r + 2
+            rGeh = r + 3
+
+            For c = FIRST_NUM_COL To lastCol
+
+                ' Percent Difference = (Vision - Manual) / Manual
+                ws.Cells(rPct, c).Formula = _
+                    "=(" & ws.Cells(rVision, c).Address(False, False) & _
+                    "-" & ws.Cells(rManual, c).Address(False, False) & _
+                    ")/" & ws.Cells(rManual, c).Address(False, False)
+
+                ws.Cells(rPct, c).NumberFormat = "0.00%"
+
+                ' GEH = SQRT( 2*(V - M)^2 / (V + M) )
+                ws.Cells(rGeh, c).Formula = _
+                    "=SQRT(2*(" & ws.Cells(rVision, c).Address(False, False) & _
+                    "-" & ws.Cells(rManual, c).Address(False, False) & _
+                    ")^2/(" & ws.Cells(rVision, c).Address(False, False) & _
+                    "+" & ws.Cells(rManual, c).Address(False, False) & "))"
+
+                ws.Cells(rGeh, c).NumberFormat = "0.00"
+
+            Next c
+
+            r = r + 4
+        Else
+            r = r + 1
+        End If
+
+    Loop
+
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    MsgBox "Standard Percent Difference and GEH formulas applied successfully.", vbInformation
+
+End Sub
