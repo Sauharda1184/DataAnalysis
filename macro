@@ -1,0 +1,93 @@
+Option Explicit
+
+'===========================
+' MAIN MACRO
+'===========================
+Sub BuildSignalTemplate()
+
+    ' Source sheet (your existing sheet that contains the data)
+    ' Output sheet (the sheet you want generated/updated)
+    Dim wsW As Worksheet, wsR As Worksheet
+    Dim lastRow As Long, r As Long, outRow As Long
+    Dim dict As Object
+    Dim sig As String, inter As String
+    Dim firstRowForSig As Long
+
+    ' ---- CHANGE SHEET NAMES HERE (already set to your names) ----
+    Set wsW = ThisWorkbook.Worksheets("Kens example")
+    Set wsR = ThisWorkbook.Worksheets("NewTemplate")
+
+    ' Safety checks (helps avoid "Subscript out of range" confusion)
+    If wsW Is Nothing Then
+        MsgBox "Sheet not found: Kens example", vbCritical
+        Exit Sub
+    End If
+    If wsR Is Nothing Then
+        MsgBox "Sheet not found: NewTemplate", vbCritical
+        Exit Sub
+    End If
+
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+
+    ' Clear old output
+    wsR.Cells.Clear
+
+    ' Headers A:S (matches your full set through SBR)
+    wsR.Range("A1:S1").Value = Array( _
+        "ID", "Intersection", "Calibration #", "Date", "Time of Day", _
+        "Total", "EB Total", "WB Total", "NB Total", "SB Total", _
+        "EBL", "EBT", "EBR", _
+        "NBL", "NBT", "NBR", _
+        "SBL", "SBT", "SBR")
+
+    ' Find last used row in source (Column A = ID)
+    lastRow = wsW.Cells(wsW.Rows.Count, "A").End(xlUp).Row
+    If lastRow < 2 Then
+        MsgBox "No data found on 'Kens example' (need headers + at least 1 data row).", vbExclamation
+        GoTo CleanExit
+    End If
+
+    ' Collect unique Signal IDs in the order they appear
+    ' (skips blank IDs)
+    For r = 2 To lastRow
+        sig = Trim$(CStr(wsW.Cells(r, "A").Value))
+        If Len(sig) > 0 Then
+            If Not dict.Exists(sig) Then
+                dict.Add sig, r ' store first row index for that signal
+            End If
+        End If
+    Next r
+
+    outRow = 2
+
+    ' Build blocks
+    Dim key As Variant
+    For Each key In dict.Keys
+
+        sig = CStr(key)
+        firstRowForSig = CLng(dict(key))
+        inter = CStr(wsW.Cells(firstRowForSig, "B").Value)
+
+        ' Insert 4 rows for this signal (Manual/Vision/%Diff/GEH)
+        wsR.Rows(outRow & ":" & outRow + 3).Insert Shift:=xlDown
+
+        ' Merge A and B ONLY across 4 rows
+        With wsR
+            .Range(.Cells(outRow, "A"), .Cells(outRow + 3, "A")).Merge
+            .Range(.Cells(outRow, "B"), .Cells(outRow + 3, "B")).Merge
+
+            .Cells(outRow, "A").Value = sig
+            .Cells(outRow, "B").Value = inter
+
+            ' Fixed row labels in Column C
+            .Cells(outRow, "C").Value = "Manual"
+            .Cells(outRow + 1, "C").Value = "Vision"
+            .Cells(outRow + 2, "C").Value = "% Difference"
+            .Cells(outRow + 3, "C").Value = "GEH"
+        End With
+
+        ' Format A:B li
