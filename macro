@@ -90,4 +90,91 @@ Sub BuildSignalTemplate()
             .Cells(outRow + 3, "C").Value = "GEH"
         End With
 
-        ' Format A:B li
+        ' Format A:B like your example (black bg, white bold, vertically centered)
+        With wsR.Range(wsR.Cells(outRow, "A"), wsR.Cells(outRow + 3, "B"))
+            .Interior.Color = vbBlack
+            .Font.Color = vbWhite
+            .Font.Bold = True
+            .VerticalAlignment = xlCenter
+            .HorizontalAlignment = xlLeft
+            .WrapText = True
+        End With
+
+        ' Fill the data rows for this signal from Kens example into the correct slots
+        FillSignalData wsW, wsR, sig, outRow, lastRow
+
+        ' Optional borders (nice visual blocks)
+        With wsR.Range(wsR.Cells(outRow, "A"), wsR.Cells(outRow + 3, "S"))
+            .Borders.LineStyle = xlContinuous
+            .Borders.Weight = xlThin
+            .BorderAround LineStyle:=xlContinuous, Weight:=xlMedium
+        End With
+
+        outRow = outRow + 4
+    Next key
+
+    ' Light formatting for header row
+    With wsR.Range("A1:S1")
+        .Font.Bold = True
+        .VerticalAlignment = xlCenter
+        .WrapText = True
+    End With
+
+    wsR.Columns("A:S").AutoFit
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+End Sub
+
+'===========================
+' HELPERS
+'===========================
+Private Sub FillSignalData(wsW As Worksheet, wsR As Worksheet, sig As String, outRow As Long, lastRow As Long)
+
+    ' Copies source columns D:S (Date..SBR) into the correct output row,
+    ' based on Calibration label in source column C.
+    '
+    ' Source mapping assumptions on "Kens example":
+    ' A = ID
+    ' B = Intersection
+    ' C = Calibration #  (Manual/Vision/% Difference/GEH)
+    ' D:S = Date..SBR (16 columns)
+
+    Dim r As Long
+    Dim cal As String
+    Dim targetRow As Long
+
+    For r = 2 To lastRow
+
+        If Trim$(CStr(wsW.Cells(r, "A").Value)) = sig Then
+
+            cal = LCase$(Trim$(CStr(wsW.Cells(r, "C").Value)))
+            targetRow = 0
+
+            Select Case cal
+                Case "manual"
+                    targetRow = outRow
+                Case "vision"
+                    targetRow = outRow + 1
+                Case "% difference", "%difference", "percent difference"
+                    targetRow = outRow + 2
+                Case "geh"
+                    targetRow = outRow + 3
+                Case Else
+                    ' If you have other labels you want to map, add them here.
+                    targetRow = 0
+            End Select
+
+            If targetRow > 0 Then
+                ' Copy D:S (16 columns) from source to output
+                wsR.Cells(targetRow, "D").Resize(1, 16).Value = wsW.Cells(r, "D").Resize(1, 16).Value
+            End If
+
+        End If
+
+    Next r
+
+End Sub
